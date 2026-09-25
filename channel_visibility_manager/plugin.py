@@ -278,11 +278,17 @@ def _tick():
     if not cache.add(lock_key, "1", timeout=LOCK_TIMEOUT_SECONDS):
         return  # another process already claimed this minute
 
+    logger.info("channel_visibility_manager: cron matched (%s), running scan", now_utc.isoformat())
     result = _run_scan(cfg_settings)
-    _write_state(
+    wrote = _write_state(
         last_run_at=now_utc.isoformat(),
         last_run_result=(result.get("message", "") or "")[:4000],
     )
+    if not wrote:
+        logger.error(
+            "channel_visibility_manager: scan ran but failed to record last-run state at %r",
+            _STATE_PATH,
+        )
     logger.info("channel_visibility_manager: scheduled scan result: %s", result.get("message"))
 
 

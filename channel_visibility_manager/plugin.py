@@ -12,13 +12,29 @@ See README.md for setup and configuration.
 """
 
 import logging
+import os
 import threading
 from datetime import datetime, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger("plugins.channel_visibility_manager")
 
-PLUGIN_KEY = "channel_visibility_manager"
+
+def _detect_plugin_key():
+    # Dispatcharr names the installed plugin directory after whatever key it
+    # assigned on import, and loads plugin.py directly from that path - so
+    # the directory this file actually lives in IS the real key, regardless
+    # of how Dispatcharr derived it. Deriving it this way (instead of
+    # hardcoding "channel_visibility_manager") avoids the scheduler silently
+    # writing to/reading from a PluginConfig row that doesn't exist if
+    # Dispatcharr ever assigns a different key (e.g. a naming collision).
+    try:
+        return os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        return "channel_visibility_manager"
+
+
+PLUGIN_KEY = _detect_plugin_key()
 POLL_INTERVAL_SECONDS = 20
 LOCK_TIMEOUT_SECONDS = 90
 
@@ -104,6 +120,8 @@ def _get_settings_dict():
 
 
 def _persist_internal_state(**updates):
+    """Returns True on success, False if no PluginConfig row was found for
+    PLUGIN_KEY (callers must surface this rather than assume it worked)."""
     from apps.plugins.models import PluginConfig
     from django.db import close_old_connections, transaction
 
@@ -111,11 +129,17 @@ def _persist_internal_state(**updates):
         with transaction.atomic():
             cfg = PluginConfig.objects.select_for_update().filter(key=PLUGIN_KEY).first()
             if not cfg:
-                return
+                logger.error(
+                    "channel_visibility_manager: no PluginConfig row for key %r; "
+                    "schedule state was NOT saved",
+                    PLUGIN_KEY,
+                )
+                return False
             settings = dict(cfg.settings or {})
             settings.update(updates)
             cfg.settings = settings
             cfg.save(update_fields=["settings"])
+            return True
     finally:
         close_old_connections()
 
@@ -282,7 +306,7 @@ _ensure_worker_started()
 
 class Plugin:
     name = "Channel Visibility Manager"
-    version = "0.0.3"
+    version = "0.0.4"
     description = (
         "Hides 'static' channels in a channel group for chosen profiles when no "
         "dynamic channels are present in that group, and shows them again once "
@@ -393,7 +417,15 @@ class Plugin:
                     "message": "Set a valid 5-field cron_schedule before enabling.",
                 }
             tz = _resolve_timezone(settings.get("timezone"))
-            _persist_internal_state(_schedule_enabled=True)
+            if not _persist_internal_state(_schedule_enabled=True):
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Could not save schedule state - no PluginConfig row "
+                        f"found for key '{PLUGIN_KEY}'. Try reloading the "
+                        f"plugin, then Enable Schedule again."
+                    ),
+                }
             _ensure_worker_started()
             return {
                 "status": "ok",
@@ -404,7 +436,11 @@ class Plugin:
             }
 
         if action == "disable_schedule":
-            _persist_internal_state(_schedule_enabled=False)
+            if not _persist_internal_state(_schedule_enabled=False):
+                return {
+                    "status": "error",
+                    "message": f"Could not save schedule state - no PluginConfig row found for key '{PLUGIN_KEY}'.",
+                }
             return {"status": "ok", "message": "Schedule disabled."}
 
         if action == "schedule_status":
@@ -422,8 +458,8 @@ class Plugin:
             return {
                 "status": "ok",
                 "message": (
-                    f"Enabled: {enabled}\nCron: {cron_expr}\nTimezone: {tz.key}\n"
-                    f"Last run: {last_run}"
+                    f"Plugin key: {PLUGIN_KEY}\nEnabled: {enabled}\nCron: {cron_expr}\n"
+                    f"Timezone: {tz.key}\nLast run: {last_run}"
                     + (f"\n\n{last_result}" if last_result else "")
                 ),
             }

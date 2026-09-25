@@ -59,7 +59,8 @@ scan.
   configured cron schedule. Takes effect within ~20 seconds.
 - **Disable Schedule** — stops the automatic schedule. Manual actions still work.
 - **Schedule Status** — reports whether the schedule is enabled and when it
-  last ran.
+  last ran, along with the plugin key it's reading/writing state under (see
+  below if `Enable Schedule` reports success but Status still shows disabled).
 
 ### About the schedule
 
@@ -87,6 +88,11 @@ Practical implications:
   system (or `tzdata` package) timezone database. If your Dispatcharr
   container image doesn't have one, an unrecognized name falls back to UTC
   and logs a warning rather than failing the schedule.
+- Scheduler state (enabled/disabled, last run) is stored under a plugin key
+  derived from the installed folder name, not hardcoded, so it always
+  matches whatever key Dispatcharr actually assigned on import. `Enable
+  Schedule` now reports an error instead of a false success if that lookup
+  ever fails; `Schedule Status` shows the key it's using for comparison.
 
 ## Building a release zip
 

@@ -141,7 +141,7 @@ def _run_scan(settings, dry_run_override=None):
     if not profile_names:
         return {"status": "error", "message": "No channel profile names configured."}
 
-    report = []
+    warnings = []
     try:
         static_channels = list(
             Channel.objects.filter(name__in=static_names).select_related("channel_group")
@@ -149,12 +149,12 @@ def _run_scan(settings, dry_run_override=None):
         matched_names = {c.name for c in static_channels}
         for n in static_names:
             if n not in matched_names:
-                report.append(f"WARNING: no channel named '{n}' found; skipped.")
+                warnings.append(f"WARNING: no channel named '{n}' found; skipped.")
 
         groups = {}
         for ch in static_channels:
             if ch.channel_group_id is None:
-                report.append(f"WARNING: '{ch.name}' has no channel group; skipped.")
+                warnings.append(f"WARNING: '{ch.name}' has no channel group; skipped.")
                 continue
             bucket = groups.setdefault(
                 ch.channel_group_id, {"group": ch.channel_group, "static_ids": []}
@@ -165,13 +165,14 @@ def _run_scan(settings, dry_run_override=None):
         matched_profiles = {p.name for p in profiles}
         for n in profile_names:
             if n not in matched_profiles:
-                report.append(f"WARNING: no channel profile named '{n}' found; skipped.")
+                warnings.append(f"WARNING: no channel profile named '{n}' found; skipped.")
 
         if not groups or not profiles:
-            report.append("Nothing to do (no matched groups or profiles).")
-            return {"status": "ok", "message": "\n".join(report), "changes": 0}
+            lines = warnings or ["Nothing to do (no matched groups or profiles)."]
+            return {"status": "ok", "message": "\n".join(lines), "changes": 0}
 
         changes = 0
+        shown, hidden = [], []
         for group_id, info in groups.items():
             static_ids = info["static_ids"]
             has_dynamic = (
@@ -179,11 +180,8 @@ def _run_scan(settings, dry_run_override=None):
                 .exclude(id__in=static_ids)
                 .exists()
             )
-            verb = "show" if has_dynamic else "hide"
-            report.append(
-                f"Group '{info['group'].name}': dynamic present={has_dynamic} -> "
-                f"{verb} {len(static_ids)} static channel(s) across {len(profiles)} profile(s)"
-            )
+            entry = f"{info['group'].name} ({len(static_ids)})"
+            (shown if has_dynamic else hidden).append(entry)
             if dry_run:
                 continue
             for profile in profiles:
@@ -192,7 +190,14 @@ def _run_scan(settings, dry_run_override=None):
                 ).update(enabled=has_dynamic)
                 changes += updated
 
-        message = "\n".join(report)
+        lines = [f"Profiles: {', '.join(p.name for p in profiles)}"]
+        if shown:
+            lines.append(f"Show: {', '.join(shown)}")
+        if hidden:
+            lines.append(f"Hide: {', '.join(hidden)}")
+        lines.extend(warnings)
+
+        message = "\n".join(lines)
         if dry_run:
             message = "[DRY RUN] " + message
         return {"status": "ok", "message": message, "changes": changes}

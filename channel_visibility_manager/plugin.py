@@ -11,6 +11,7 @@ dynamic channel is present, and hidden (disabled) when it isn't.
 See README.md for setup and configuration.
 """
 
+import json
 import logging
 import os
 import threading
@@ -24,10 +25,7 @@ def _detect_plugin_key():
     # Dispatcharr names the installed plugin directory after whatever key it
     # assigned on import, and loads plugin.py directly from that path - so
     # the directory this file actually lives in IS the real key, regardless
-    # of how Dispatcharr derived it. Deriving it this way (instead of
-    # hardcoding "channel_visibility_manager") avoids the scheduler silently
-    # writing to/reading from a PluginConfig row that doesn't exist if
-    # Dispatcharr ever assigns a different key (e.g. a naming collision).
+    # of how Dispatcharr derived it.
     try:
         return os.path.basename(os.path.dirname(os.path.abspath(__file__)))
     except Exception:
@@ -37,6 +35,16 @@ def _detect_plugin_key():
 PLUGIN_KEY = _detect_plugin_key()
 POLL_INTERVAL_SECONDS = 20
 LOCK_TIMEOUT_SECONDS = 90
+
+# Scheduler bookkeeping (enabled flag, last run) lives in its own file next
+# to plugin.py, NOT in PluginConfig.settings. Dispatcharr's frontend saves
+# settings (from whatever it last had loaded in the browser) before running
+# every action, including Schedule Status - and the backend does a full
+# `cfg.settings = settings` replace, not a merge. Any key we wrote there
+# that the browser doesn't know about (like _schedule_enabled) gets wiped
+# out the next time any action button is clicked. A private state file
+# sidesteps that entirely.
+_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_scheduler_state.json")
 
 _thread_lock = threading.Lock()
 _worker_thread = None
@@ -103,9 +111,9 @@ def _cron_matches(expr: str, when: datetime) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Settings persistence helpers (PluginConfig.settings is the only storage
-# plugins get, so internal scheduler state is stashed in there alongside the
-# user-editable fields).
+# Settings (user-editable fields, e.g. cron_schedule) still live in
+# PluginConfig.settings and are read straight from the DB, which is fine -
+# that's exactly what the normal save flow keeps up to date.
 # ---------------------------------------------------------------------------
 
 def _get_settings_dict():
@@ -119,29 +127,35 @@ def _get_settings_dict():
         close_old_connections()
 
 
-def _persist_internal_state(**updates):
-    """Returns True on success, False if no PluginConfig row was found for
-    PLUGIN_KEY (callers must surface this rather than assume it worked)."""
-    from apps.plugins.models import PluginConfig
-    from django.db import close_old_connections, transaction
+# ---------------------------------------------------------------------------
+# Scheduler state (private file - see _STATE_PATH comment above).
+# ---------------------------------------------------------------------------
 
+def _read_state():
     try:
-        with transaction.atomic():
-            cfg = PluginConfig.objects.select_for_update().filter(key=PLUGIN_KEY).first()
-            if not cfg:
-                logger.error(
-                    "channel_visibility_manager: no PluginConfig row for key %r; "
-                    "schedule state was NOT saved",
-                    PLUGIN_KEY,
-                )
-                return False
-            settings = dict(cfg.settings or {})
-            settings.update(updates)
-            cfg.settings = settings
-            cfg.save(update_fields=["settings"])
-            return True
-    finally:
-        close_old_connections()
+        with open(_STATE_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        logger.exception("channel_visibility_manager: failed to read scheduler state file")
+        return {}
+
+
+def _write_state(**updates):
+    """Returns True on success, False if the state file couldn't be written
+    (callers must surface this rather than assume it worked)."""
+    state = _read_state()
+    state.update(updates)
+    tmp_path = _STATE_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        os.replace(tmp_path, _STATE_PATH)
+        return True
+    except Exception:
+        logger.exception("channel_visibility_manager: failed to write scheduler state file")
+        return False
 
 
 def _parse_csv(value):
@@ -243,10 +257,10 @@ def _run_scan(settings, dry_run_override=None):
 def _tick():
     from django.core.cache import cache
 
-    cfg_settings = _get_settings_dict()
-    if not cfg_settings.get("_schedule_enabled"):
+    if not _read_state().get("schedule_enabled"):
         return
 
+    cfg_settings = _get_settings_dict()
     cron_expr = (cfg_settings.get("cron_schedule") or "").strip()
     if not cron_expr:
         return
@@ -265,9 +279,9 @@ def _tick():
         return  # another process already claimed this minute
 
     result = _run_scan(cfg_settings)
-    _persist_internal_state(
-        _last_run_at=now_utc.isoformat(),
-        _last_run_result=(result.get("message", "") or "")[:4000],
+    _write_state(
+        last_run_at=now_utc.isoformat(),
+        last_run_result=(result.get("message", "") or "")[:4000],
     )
     logger.info("channel_visibility_manager: scheduled scan result: %s", result.get("message"))
 
@@ -417,14 +431,10 @@ class Plugin:
                     "message": "Set a valid 5-field cron_schedule before enabling.",
                 }
             tz = _resolve_timezone(settings.get("timezone"))
-            if not _persist_internal_state(_schedule_enabled=True):
+            if not _write_state(schedule_enabled=True):
                 return {
                     "status": "error",
-                    "message": (
-                        f"Could not save schedule state - no PluginConfig row "
-                        f"found for key '{PLUGIN_KEY}'. Try reloading the "
-                        f"plugin, then Enable Schedule again."
-                    ),
+                    "message": "Could not save schedule state to disk - check the plugin directory is writable.",
                 }
             _ensure_worker_started()
             return {
@@ -436,25 +446,26 @@ class Plugin:
             }
 
         if action == "disable_schedule":
-            if not _persist_internal_state(_schedule_enabled=False):
+            if not _write_state(schedule_enabled=False):
                 return {
                     "status": "error",
-                    "message": f"Could not save schedule state - no PluginConfig row found for key '{PLUGIN_KEY}'.",
+                    "message": "Could not save schedule state to disk - check the plugin directory is writable.",
                 }
             return {"status": "ok", "message": "Schedule disabled."}
 
         if action == "schedule_status":
+            state = _read_state()
             cfg_settings = _get_settings_dict()
-            enabled = bool(cfg_settings.get("_schedule_enabled"))
+            enabled = bool(state.get("schedule_enabled"))
             cron_expr = cfg_settings.get("cron_schedule") or "(none)"
             tz = _resolve_timezone(cfg_settings.get("timezone"))
-            last_run_raw = cfg_settings.get("_last_run_at")
+            last_run_raw = state.get("last_run_at")
             if last_run_raw:
                 last_run_utc = datetime.fromisoformat(last_run_raw)
                 last_run = last_run_utc.astimezone(tz).strftime("%Y-%m-%d_%H:%M:%S")
             else:
                 last_run = "never"
-            last_result = cfg_settings.get("_last_run_result") or ""
+            last_result = state.get("last_run_result") or ""
             return {
                 "status": "ok",
                 "message": (

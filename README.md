@@ -76,8 +76,15 @@ Practical implications:
 - **Editing** the cron expression, timezone, or saving settings does **not**
   move an already-running schedule — click **Enable Schedule** again to
   apply the change.
-- The schedule's enabled/disabled state is stored in the plugin's own
-  settings, so it survives a Dispatcharr restart and resumes automatically.
+- Whether the schedule is enabled, and when it last ran, is stored in a
+  small `_scheduler_state.json` file next to `plugin.py` in the installed
+  plugin directory - **not** in the plugin's Dispatcharr settings. Dispatcharr's
+  frontend saves the settings form (from whatever it last loaded in the
+  browser) before running *every* action, and the backend replaces
+  `PluginConfig.settings` wholesale rather than merging - so any extra key
+  we wrote there would get wiped out by the next unrelated button click.
+  The state file isn't touched by that flow, and still survives a
+  Dispatcharr restart.
 - Disabling, deleting, or reloading the plugin stops the poll loop
   immediately (via the plugin's `stop()` hook).
 - The cross-process lock that prevents double-running is always keyed on
@@ -87,11 +94,6 @@ Practical implications:
   system (or `tzdata` package) timezone database. If your Dispatcharr
   container image doesn't have one, an unrecognized name falls back to UTC
   and logs a warning rather than failing the schedule.
-- Scheduler state (enabled/disabled, last run) is stored under a plugin key
-  derived from the installed folder name, not hardcoded, so it always
-  matches whatever key Dispatcharr actually assigned on import. `Enable
-  Schedule` reports an error instead of a false success if that lookup
-  ever fails.
 - After updating the plugin's files, Dispatcharr needs an explicit reload
   (or restart) to actually run the new code — re-importing the zip over an
   existing install doesn't reload an already-running Python process.

@@ -58,9 +58,8 @@ scan.
 - **Enable Schedule** — starts running the scan automatically on the
   configured cron schedule. Takes effect within ~20 seconds.
 - **Disable Schedule** — stops the automatic schedule. Manual actions still work.
-- **Schedule Status** — reports whether the schedule is enabled and when it
-  last ran, along with the plugin key it's reading/writing state under (see
-  below if `Enable Schedule` reports success but Status still shows disabled).
+- **Schedule Status** — reports whether the schedule is enabled, the cron/
+  timezone in effect, and when it last ran (in the configured timezone).
 
 ### About the schedule
 
@@ -91,8 +90,11 @@ Practical implications:
 - Scheduler state (enabled/disabled, last run) is stored under a plugin key
   derived from the installed folder name, not hardcoded, so it always
   matches whatever key Dispatcharr actually assigned on import. `Enable
-  Schedule` now reports an error instead of a false success if that lookup
-  ever fails; `Schedule Status` shows the key it's using for comparison.
+  Schedule` reports an error instead of a false success if that lookup
+  ever fails.
+- After updating the plugin's files, Dispatcharr needs an explicit reload
+  (or restart) to actually run the new code — re-importing the zip over an
+  existing install doesn't reload an already-running Python process.
 
 ## Building a release zip
 

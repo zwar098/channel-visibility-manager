@@ -451,15 +451,15 @@ class Plugin:
             last_run_raw = cfg_settings.get("_last_run_at")
             if last_run_raw:
                 last_run_utc = datetime.fromisoformat(last_run_raw)
-                last_run = f"{last_run_utc.isoformat()} ({last_run_utc.astimezone(tz).isoformat()})"
+                last_run = last_run_utc.astimezone(tz).strftime("%Y-%m-%d_%H:%M:%S")
             else:
                 last_run = "never"
             last_result = cfg_settings.get("_last_run_result") or ""
             return {
                 "status": "ok",
                 "message": (
-                    f"Plugin key: {PLUGIN_KEY}\nEnabled: {enabled}\nCron: {cron_expr}\n"
-                    f"Timezone: {tz.key}\nLast run: {last_run}"
+                    f"Enabled: {enabled}\nCron: {cron_expr}\nTimezone: {tz.key}\n"
+                    f"Last run: {last_run}"
                     + (f"\n\n{last_result}" if last_result else "")
                 ),
             }

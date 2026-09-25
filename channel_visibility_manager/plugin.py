@@ -326,7 +326,7 @@ _ensure_worker_started()
 
 class Plugin:
     name = "Channel Visibility Manager"
-    version = "0.0.5"
+    version = "0.1.0"
     description = (
         "Hides 'static' channels in a channel group for chosen profiles when no "
         "dynamic channels are present in that group, and shows them again once "

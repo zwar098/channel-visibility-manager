@@ -43,7 +43,8 @@ there's actually a live event channel alongside it.
 |---|---|
 | **Static channel names** | Comma-separated, exact channel names to treat as static, e.g. `Backup Feed 1, NFL Redzone Backup`. |
 | **Channel profile names** | Comma-separated Dispatcharr Channel Profile names to enforce visibility on, e.g. `Default, Kids`. |
-| **Cron schedule (UTC)** | Standard 5-field cron expression (`minute hour day month weekday`), evaluated in UTC. |
+| **Cron schedule** | Standard 5-field cron expression (`minute hour day month weekday`), evaluated in the configured timezone. |
+| **Timezone** | IANA timezone name the cron schedule is evaluated in, e.g. `America/New_York`, `Europe/London`. Defaults to `UTC`. |
 | **Dry run** | When on, scans report what they *would* change without changing anything. |
 
 Channel names must match exactly. Unmatched names or profile names are
@@ -72,14 +73,20 @@ a cross-process lock so a given cron minute is only acted on once even if
 Dispatcharr is running multiple web workers.
 
 Practical implications:
-- **Editing** the cron expression and saving settings does **not** move an
-  already-running schedule — click **Enable Schedule** again to apply the
-  change.
+- **Editing** the cron expression, timezone, or saving settings does **not**
+  move an already-running schedule — click **Enable Schedule** again to
+  apply the change.
 - The schedule's enabled/disabled state is stored in the plugin's own
   settings, so it survives a Dispatcharr restart and resumes automatically.
 - Disabling, deleting, or reloading the plugin stops the poll loop
   immediately (via the plugin's `stop()` hook).
-- Cron times are evaluated in UTC, not local server time.
+- The cross-process lock that prevents double-running is always keyed on
+  the underlying UTC instant, so changing the timezone field can't cause a
+  minute to be skipped or double-fired around a DST transition.
+- Timezone names are resolved with Python's `zoneinfo`, which depends on a
+  system (or `tzdata` package) timezone database. If your Dispatcharr
+  container image doesn't have one, an unrecognized name falls back to UTC
+  and logs a warning rather than failing the schedule.
 
 ## License
 

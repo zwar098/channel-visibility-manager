@@ -14,6 +14,7 @@ See README.md for setup and configuration.
 import logging
 import threading
 from datetime import datetime, timezone as dt_timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger("plugins.channel_visibility_manager")
 
@@ -49,6 +50,19 @@ def _cron_field_matches(field: str, value: int) -> bool:
             if int(part) == value:
                 return True
     return False
+
+
+def _resolve_timezone(tz_name: str) -> ZoneInfo:
+    tz_name = (tz_name or "").strip() or "UTC"
+    try:
+        return ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning(
+            "channel_visibility_manager: unknown timezone %r (is the tzdata "
+            "package installed in this container?); falling back to UTC",
+            tz_name,
+        )
+        return ZoneInfo("UTC")
 
 
 def _cron_matches(expr: str, when: datetime) -> bool:
@@ -208,17 +222,22 @@ def _tick():
     if not cron_expr:
         return
 
-    now = datetime.now(dt_timezone.utc).replace(second=0, microsecond=0)
-    if not _cron_matches(cron_expr, now):
+    # The lock is always keyed on the UTC instant, regardless of the
+    # configured timezone, so a DST transition can't cause a minute to be
+    # seen twice (fold) or skipped (gap) from the lock's point of view.
+    now_utc = datetime.now(dt_timezone.utc).replace(second=0, microsecond=0)
+    tz = _resolve_timezone(cfg_settings.get("timezone"))
+    local_now = now_utc.astimezone(tz)
+    if not _cron_matches(cron_expr, local_now):
         return
 
-    lock_key = f"channel_visibility_manager:tick:{now.isoformat()}"
+    lock_key = f"channel_visibility_manager:tick:{now_utc.isoformat()}"
     if not cache.add(lock_key, "1", timeout=LOCK_TIMEOUT_SECONDS):
         return  # another process already claimed this minute
 
     result = _run_scan(cfg_settings)
     _persist_internal_state(
-        _last_run_at=now.isoformat(),
+        _last_run_at=now_utc.isoformat(),
         _last_run_result=(result.get("message", "") or "")[:4000],
     )
     logger.info("channel_visibility_manager: scheduled scan result: %s", result.get("message"))
@@ -258,7 +277,7 @@ _ensure_worker_started()
 
 class Plugin:
     name = "Channel Visibility Manager"
-    version = "0.0.1"
+    version = "0.0.2"
     description = (
         "Hides 'static' channels in a channel group for chosen profiles when no "
         "dynamic channels are present in that group, and shows them again once "
@@ -291,13 +310,25 @@ class Plugin:
         },
         {
             "id": "cron_schedule",
-            "label": "Cron schedule (UTC)",
+            "label": "Cron schedule",
             "type": "string",
             "default": "*/15 * * * *",
             "help_text": (
                 "Standard 5-field cron expression (minute hour day month weekday), "
-                "evaluated in UTC. Editing this does NOT move a running schedule - "
-                "click 'Enable Schedule' again to apply changes."
+                "evaluated in the timezone set below. Editing this does NOT move a "
+                "running schedule - click 'Enable Schedule' again to apply changes."
+            ),
+        },
+        {
+            "id": "timezone",
+            "label": "Timezone",
+            "type": "string",
+            "default": "UTC",
+            "help_text": (
+                "IANA timezone name the cron schedule is evaluated in, e.g. "
+                "'America/New_York', 'Europe/London', 'Asia/Tokyo'. Falls back to "
+                "UTC (with a warning logged) if the name isn't recognized. DST "
+                "transitions are handled automatically."
             ),
         },
         {
@@ -356,12 +387,13 @@ class Plugin:
                     "status": "error",
                     "message": "Set a valid 5-field cron_schedule before enabling.",
                 }
+            tz = _resolve_timezone(settings.get("timezone"))
             _persist_internal_state(_schedule_enabled=True)
             _ensure_worker_started()
             return {
                 "status": "ok",
                 "message": (
-                    f"Schedule enabled: '{cron_expr}' (UTC). "
+                    f"Schedule enabled: '{cron_expr}' ({tz.key}). "
                     f"Applies within {POLL_INTERVAL_SECONDS}s."
                 ),
             }
@@ -374,12 +406,19 @@ class Plugin:
             cfg_settings = _get_settings_dict()
             enabled = bool(cfg_settings.get("_schedule_enabled"))
             cron_expr = cfg_settings.get("cron_schedule") or "(none)"
-            last_run = cfg_settings.get("_last_run_at") or "never"
+            tz = _resolve_timezone(cfg_settings.get("timezone"))
+            last_run_raw = cfg_settings.get("_last_run_at")
+            if last_run_raw:
+                last_run_utc = datetime.fromisoformat(last_run_raw)
+                last_run = f"{last_run_utc.isoformat()} ({last_run_utc.astimezone(tz).isoformat()})"
+            else:
+                last_run = "never"
             last_result = cfg_settings.get("_last_run_result") or ""
             return {
                 "status": "ok",
                 "message": (
-                    f"Enabled: {enabled}\nCron: {cron_expr}\nLast run (UTC): {last_run}"
+                    f"Enabled: {enabled}\nCron: {cron_expr}\nTimezone: {tz.key}\n"
+                    f"Last run: {last_run}"
                     + (f"\n\n{last_result}" if last_result else "")
                 ),
             }

@@ -33,9 +33,10 @@ there's actually a live event channel alongside it.
 1. Download/clone this repo.
 2. Copy the `channel_visibility_manager/` folder into Dispatcharr's plugins
    directory (`/data/plugins/channel_visibility_manager/` inside the
-   container, i.e. the host path you've mounted to `/data`), **or** zip the
-   `channel_visibility_manager/` folder's contents and upload it via
-   Dispatcharr's Plugins UI ("Import Plugin").
+   container, i.e. the host path you've mounted to `/data`), **or** download
+   the zip from the [latest release](../../releases/latest) and upload it via
+   Dispatcharr's Plugins UI ("Import Plugin") — the zip's top-level entry is
+   the `channel_visibility_manager/` folder itself, as Dispatcharr expects.
 3. Enable the plugin from the Dispatcharr Plugins page.
 
 ## Settings

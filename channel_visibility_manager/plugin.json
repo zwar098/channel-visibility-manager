@@ -1,6 +1,6 @@
 {
   "name": "Channel Visibility Manager",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Hides 'static' channels in a channel group for chosen Dispatcharr profiles when no dynamic channels are present in that group, and shows them again once a dynamic channel appears.",
   "author": "zwar098",
   "help_url": "https://github.com/zwar098/channel-visibility-manager"

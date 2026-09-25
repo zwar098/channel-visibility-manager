@@ -88,6 +88,15 @@ Practical implications:
   container image doesn't have one, an unrecognized name falls back to UTC
   and logs a warning rather than failing the schedule.
 
+## Building a release zip
+
+Always build the release archive with `python scripts/build_release_zip.py`
+rather than Windows' `Compress-Archive`. `Compress-Archive` writes backslash
+path separators inside the zip, which isn't valid per the ZIP spec —
+Dispatcharr's importer (running on Linux) doesn't treat `\` as a directory
+separator, so it fails with "missing plugin.py or package `__init__.py`"
+even though the file is right there.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
